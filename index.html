@@ -1,0 +1,394 @@
+<html>
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <script src="http://cdn.bootcss.com/jquery/2.1.4/jquery.min.js"></script>
+  <script src="http://cdn.bootcss.com/bootstrap/3.3.5/js/bootstrap.min.js"></script>
+  <link href="http://cdn.bootcss.com/bootstrap/3.3.5/css/bootstrap.min.css" rel="stylesheet">
+  <script src="http://echarts.baidu.com/build/dist/echarts.js"></script>
+  <title>TraceLog Analyzer</title>
+</head>
+<body>
+  <script type="text/javascript" charset="utf-8">
+
+    require.config({
+        paths: {
+            echarts: 'http://echarts.baidu.com/build/dist'
+        }
+    });
+
+    function saveData(log) {
+      if (log.trim() == '') return;
+
+      var myDate = new Date();
+      var createAt = myDate.toLocaleString(); //获取当前日期
+
+      var data = { log : log, createAt : createAt };
+      var items;
+      var record = localStorage.getItem('record');
+      if (record) {
+        items = JSON.parse(record);
+        if (items.length > 10) {
+          items.shift();
+        }
+        items.push(data); // 最多保存30条
+      } else {
+        items = new Array(data);
+      }
+      localStorage.setItem('record', JSON.stringify(items));
+    }
+
+    function clearData() {
+      localStorage.setItem('record', new Array());
+    }
+
+    function getData() {
+      var items = new Array();
+      var record = localStorage.getItem('record');
+      if (record) {
+        items = JSON.parse(record);
+      }
+      return items;
+    }
+
+    function getHistory() {
+      var items = getData();
+      var history = "";
+      items.map(function(item) {
+        history += "<div><kbd style='cursor:hand'>" + item.createAt + "</kbd> <span> " + item.log.slice(0, 100) + "</span></div>";
+      });
+      return history;
+    }
+
+    function getSpaceNum(s) {
+        var v = 0;
+        for (var i = 0; i < s.length; i++) {
+            if (s[i] == ' ') v++; else break;
+        }
+        return v;
+    }
+
+    function buildTree(nodes) {
+        if (nodes.length <= 0) return;
+
+        for (var i = 0; i < nodes.length - 1; i++) {
+            var cur = nodes[i];
+            for (var j = i + 1; j < nodes.length; j++) {
+                if (nodes[j][5] <= cur[5]) { // got sibling, break;
+                    break;
+                } else if (nodes[j][5] == cur[5] + 1) { // child
+                   cur[7].push(j);
+                } else {
+                    continue;
+                }
+            }
+        }
+        var dataset = {};
+        var cur = nodes[0];
+        setNodeId(nodes, cur);
+        setNodeColor(nodes, cur);
+
+        dataset['name'] = cur[6];
+        dataset['children'] = getNode(nodes, cur[7]);
+        showTree2(dataset);
+    }
+
+    var dfoId = 0;
+    var dfoColor = '#48b';
+    var colorStack = [];
+    function swapColor() {
+        if (dfoColor == '#48b') {
+            dfoColor = '#ff723a';
+        } else {
+            dfoColor = '#48b';
+        }
+    }
+
+    function setNodeColor(nodes, cur) {
+        var indexes = cur[7];
+        cur[8] = dfoColor;
+        if (cur[1].indexOf("EXCHANGE IN") >= 0) {
+            colorStack.push(dfoColor);
+            swapColor();
+        }
+        for (var i = 0;  undefined != indexes && i < indexes.length; i++) {
+            var node = nodes[indexes[i]];
+            setNodeColor(nodes, node);
+        }
+        if (cur[1].indexOf("EXCHANGE IN") >= 0) {
+            dfoColor = colorStack.pop();
+        }
+    }
+    function setNodeId(nodes, cur) {
+        var children = [];
+        var indexes = cur[7];
+        if (undefined != indexes && 0 < indexes.length) {
+            var node = nodes[indexes[0]];
+            setNodeId(nodes, node);
+        }
+        if (cur[1].indexOf("EXCHANGE OUT") >= 0) {
+            cur[6] = cur[6] + "(" + dfoId + ")";
+            dfoId++;
+        }
+        for (var i = 1;  undefined != indexes && i < indexes.length; i++) {
+            var node = nodes[indexes[i]];
+            setNodeId(nodes, node);
+        }
+    }
+
+    function showTree2(dataset) {
+        require(
+            [
+                'echarts',
+                'echarts/chart/tree' // 使用柱状图就加载bar模块，按需加载
+            ],
+            function (ec) {
+
+       var myChart = ec.init(document.getElementById('main'));
+        var option = {
+            title : {
+                text: 'PX 计划树',
+                subtext: 'by Raywill'
+            },
+            tooltip : {
+                trigger: 'item',
+                formatter: function (params,ticket,callback) {
+                    // console.log(params)
+                    var res = params[5].fullName + ' <br/>' +
+                            "explain id: " + params[5].id + ' <br/>' +
+                            "est.row: " + params[5].estRow + ' <br/>' +
+                            "cost: " + params[5].cost;
+                    return res;
+                }
+            },
+            toolbox: {
+                show : true,
+                feature : {
+                    mark : {show: true},
+                    dataView : {show: true, readOnly: false},
+                    restore : {show: true},
+                    saveAsImage : {show: true}
+                }
+            },
+            calculable : false,
+            series : [
+                {
+                    name:'树图',
+                    type:'tree',
+                    orient: 'vertical',  // vertical horizontal
+                    rootLocation: {x: 'center',y: 50}, // 根节点位置  {x: 100, y: 'center'}
+                    layerPadding: 30,
+                    nodePadding: 100,
+                    itemStyle: {
+                        normal: {
+                            label: {
+                                show: true,
+                                position: 'left',
+                                formatter: "{b}"
+                            },
+                            lineStyle: {
+                                color: '#48b',
+                                shadowColor: '#000',
+                                shadowBlur: 0,
+                                shadowOffsetX: 0,
+                                shadowOffsetY: 0,
+                                type: 'curve' // 'curve'|'broken'|'solid'|'dotted'|'dashed'
+
+                            }
+                        },
+                        emphasis: {
+                            label: {
+                                show: true
+                            }
+                        }
+                    },
+                    data : [dataset]
+                }
+            ]
+        };
+        myChart.setOption(option);
+
+        });
+    }
+
+    function getNode(nodes, indexes) {
+        var children = [];
+        for (var i = 0; i < indexes.length; i++) {
+            var node = nodes[indexes[i]];
+            if (false && node[1].indexOf("EXCHANGE OUT") >= 0) {
+                children.push({"name":node[6],
+                               "value":node[2],
+                               "id":node[0],
+                               "fullName":node[1].trim(),
+                               "estRow":node[3],
+                               "cost":node[4],
+                               "children":getNode(nodes, node[7]),
+                               "itemStyle": {"normal":{"color":'#000000'}}
+                });
+                //console.log(node[1]);
+            } else {
+            children.push({"name":node[6],
+                           "value":node[2],
+                           "id":node[0],
+                           "fullName":node[1].trim(),
+                           "estRow":node[3],
+                           "cost":node[4],
+                           "children":getNode(nodes, node[7]),
+                           "itemStyle":{"normal":{"color":node[8]}}});
+            }
+        }
+        return children;
+    }
+
+    function shortName(v) {
+        var map = {
+            "HASH JOIN":"HJ",
+            "EXCHANGE IN DISTR":"IN.FF",
+            "EXCHANGE OUT DISTR":"OUT.1",
+            "NESTED-LOOP JOIN":"NLJ",
+            "EXCHANGE OUT DISTR (PKEY)":"OUT.PK",
+            "TABLE SCAN":"TSC",
+            "MERGE JOIN":"MJ",
+            "EXCHANGE IN MERGE SORT DISTR":"IN.SORT",
+            "SCALAR GROUP BY":"SC GBY",
+            "TABLE GET":"TGET",
+            "GRANULE ITERATOR":"GI",
+            "EXCHANGE OUT DISTR (HASH)":"OUT.HASH",
+            "MERGE GROUP BY":"MG GBY",
+            "MATERIAL":"MTRL"
+        };
+        var shortName = (map[v] == undefined) ? v : map[v];
+        return shortName;
+    }
+
+    function analyze(trace) {
+      var traces = trace.split('\n');
+      var nodes = [];
+      table = "<div>"
+      traces.map(function(t) {
+        var line = t.replace(/^\|/g,'').replace(/\|$/g, '').split('|');
+        if (line.length ==  5) {
+            line.push(getSpaceNum(line[1]));  // 5
+            line.push(shortName(line[1].trim()) + "\n" + line[2]); // 6
+            line.push([]); // 7, child
+            line.push('#48b'); // 8, node color
+            nodes.push(line);
+            table += t;
+        }
+      });
+      table += "</div>";
+      //$("#result").html(table);
+      buildTree(nodes);
+
+
+
+    }
+
+    $(document).ready(function() {
+    var sample =
+"|0 |LIMIT                                                       |        |9        |996221|" + "\n" +
+"|1 | EXCHANGE IN MERGE SORT DISTR                               |        |9        |996220|" + "\n" +
+"|2 |  EXCHANGE OUT DISTR                                        |        |9        |996116|" + "\n" +
+"|3 |   LIMIT                                                    |        |9        |996116|" + "\n" +
+"|4 |    TOP-N SORT                                              |        |9        |996115|" + "\n" +
+"|5 |     HASH JOIN                                              |        |9        |996111|" + "\n" +
+"|6 |      EXCHANGE IN DISTR                                     |        |45       |995682|" + "\n" +
+"|7 |       EXCHANGE OUT DISTR (HASH)                            |        |45       |995617|" + "\n" +
+"|8 |        MATERIAL                                            |        |45       |995617|" + "\n" +
+"|9 |         HASH JOIN                                          |        |45       |995601|" + "\n" +
+"|10|          EXCHANGE IN DISTR                                 |        |45       |995173|" + "\n" +
+"|11|           EXCHANGE OUT DISTR (HASH)                        |        |45       |995119|" + "\n" +
+"|12|            NESTED-LOOP JOIN                                |        |45       |995119|" + "\n" +
+"|13|             MATERIAL                                       |        |31       |993979|" + "\n" +
+"|14|              EXCHANGE IN DISTR                             |        |31       |993968|" + "\n" +
+"|15|               EXCHANGE OUT DISTR (PKEY)                    |        |31       |993968|" + "\n" +
+"|16|                MATERIAL                                    |        |31       |993968|" + "\n" +
+"|17|                 SUBPLAN FILTER                             |        |31       |993956|" + "\n" +
+"|18|                  EXCHANGE IN DISTR                         |        |31       |279321|" + "\n" +
+"|19|                   EXCHANGE OUT DISTR                       |        |31       |279304|" + "\n" +
+"|20|                    NESTED-LOOP JOIN                        |        |31       |279304|" + "\n" +
+"|21|                     GRANULE ITERATOR                       |        |1361     |3016  |" + "\n" +
+"|22|                      TABLE SCAN                            |part    |1361     |3016  |" + "\n" +
+"|23|                     GRANULE ITERATOR                       |        |257      |37    |" + "\n" +
+"|24|                      TABLE SCAN                            |partsupp|257      |37    |" + "\n" +
+"|25|                  SCALAR GROUP BY                           |        |1        |23082 |" + "\n" +
+"|26|                   EXCHANGE IN DISTR                        |        |1        |23082 |" + "\n" +
+"|27|                    EXCHANGE OUT DISTR                      |        |1        |23082 |" + "\n" +
+"|28|                     MATERIAL                               |        |1        |23082 |" + "\n" +
+"|29|                      MERGE GROUP BY                        |        |1        |23082 |" + "\n" +
+"|30|                       HASH JOIN                            |        |75       |23067 |" + "\n" +
+"|31|                        EXCHANGE IN DISTR                   |        |372      |22133 |" + "\n" +
+"|32|                         EXCHANGE OUT DISTR (HASH)          |        |372      |22006 |" + "\n" +
+"|33|                          MATERIAL                          |        |372      |22006 |" + "\n" +
+"|34|                           HASH JOIN                        |        |372      |21869 |" + "\n" +
+"|35|                            EXCHANGE IN DISTR               |        |372      |20859 |" + "\n" +
+"|36|                             EXCHANGE OUT DISTR (HASH)      |        |372      |20766 |" + "\n" +
+"|37|                              MATERIAL                      |        |372      |20766 |" + "\n" +
+"|38|                               MERGE JOIN                   |        |372      |20630 |" + "\n" +
+"|39|                                EXCHANGE IN MERGE SORT DISTR|        |257      |411   |" + "\n" +
+"|40|                                 EXCHANGE OUT DISTR (PKEY)  |        |257      |372   |" + "\n" +
+"|41|                                  SORT                      |        |257      |372   |" + "\n" +
+"|42|                                   GRANULE ITERATOR         |        |257      |37    |" + "\n" +
+"|43|                                    TABLE SCAN              |partsupp|257      |37    |" + "\n" +
+"|44|                                SORT                        |        |10112    |18536 |" + "\n" +
+"|45|                                 GRANULE ITERATOR           |        |10112    |51    |" + "\n" +
+"|46|                                  TABLE SCAN                |supplier|10112    |51    |" + "\n" +
+"|47|                            EXCHANGE IN DISTR               |        |25       |43    |" + "\n" +
+"|48|                             EXCHANGE OUT DISTR (HASH)      |        |25       |41    |" + "\n" +
+"|49|                              GRANULE ITERATOR              |        |25       |41    |" + "\n" +
+"|50|                               TABLE SCAN                   |nation  |25       |41    |" + "\n" +
+"|51|                        EXCHANGE IN DISTR                   |        |1        |40    |" + "\n" +
+"|52|                         EXCHANGE OUT DISTR (HASH)          |        |1        |39    |" + "\n" +
+"|53|                          GRANULE ITERATOR                  |        |1        |39    |" + "\n" +
+"|54|                           TABLE SCAN                       |region  |1        |39    |" + "\n" +
+"|55|             GRANULE ITERATOR                               |        |2        |36    |" + "\n" +
+"|56|              TABLE GET                                     |supplier|2        |36    |" + "\n" +
+"|57|          EXCHANGE IN DISTR                                 |        |25       |47    |" + "\n" +
+"|58|           EXCHANGE OUT DISTR (HASH)                        |        |25       |41    |" + "\n" +
+"|59|            GRANULE ITERATOR                                |        |25       |41    |" + "\n" +
+"|60|             TABLE SCAN                                     |nation  |25       |41    |" + "\n" +
+"|61|      EXCHANGE IN DISTR                                     |        |1        |40    |" + "\n" +
+"|62|       EXCHANGE OUT DISTR (HASH)                            |        |1        |39    |" + "\n" +
+"|63|        GRANULE ITERATOR                                    |        |1        |39    |" + "\n" +
+"|64|         TABLE SCAN                                         |region  |1        |39    |" + "\n";
+      $("#trace").val(sample);
+      analyze(sample); // 首次显示
+
+      $("#clear").click(function() {
+        $("#trace").val('');
+        $("#result").html('');
+      });
+
+      $("#analyze").click(function() {
+        var trace = $("#trace").val().replace(/[=]/g, "");;
+        $("#trace").val(trace);
+        saveData(trace);
+        analyze(trace);
+        });
+
+      $("#show").click(function() {
+        $("#history").html(getHistory());
+      });
+
+
+    });
+
+      </script>
+
+
+      <h1>PX 计划分析工具</h1>
+
+      <div class="well">
+        <h5>用法：1. 粘贴 explain 的结果 2. 点“分析”按钮</h5>
+        <textarea class="form-control" rows="10" id="trace"></textarea><br/>
+        <input id="analyze" class="btn btn-primary btn-lg" type="button" value="分析">
+        <input id="clear" class="btn btn-default btn-lg" type="button" value="清空">
+        <input id="show" class="btn btn-default btn-lg" type="button" role="button" value="历史" data-toggle="collapse" data-target="#history" aria-expanded="false" aria-controls="history">
+      </div>
+
+
+      <div id="result" class="row" style="width:1024px"></div>
+      <br>
+      <div id="history"  class="well collapse">data</div>
+      <div id="main" style="width:1200;height:2400px;"></div>
+    </body>
+  </html>
